@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>문제 검색 시스템</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        select, input { padding: 8px; margin-right: 10px; }
+        .question-item { padding: 10px; border-bottom: 1px solid #ddd; cursor: pointer; }
+        .question-item:hover { background: #f0f0f0; }
+        #answer-box { margin-top: 20px; padding: 15px; border: 1px solid #444; background: #fafafa; }
+    </style>
+</head>
+<body>
+
+<h1>문제 검색 시스템</h1>
+
+<select id="subject"></select>
+<select id="theme"></select>
+<input type="text" id="search" placeholder="검색어 입력">
+
+<hr>
+
+<div id="questionList"></div>
+<div id="answer-box"></div>
+
+<script>
+// GitHub Pages용 절대 경로
+const jsonURL = "https://kangroo1209-alt.github.io/quizquiz/output.json";
+
+fetch(jsonURL)
+    .then(res => {
+        if (!res.ok) throw new Error("JSON 파일을 불러올 수 없습니다!");
+        return res.json();
+    })
+    .then(data => startApp(data))
+    .catch(err => {
+        document.getElementById("questionList").innerHTML = `<p style="color:red;">${err.message}</p>`;
+        console.error(err);
+    });
+
+function startApp(data) {
+    const subjectBox = document.getElementById("subject");
+    const themeBox = document.getElementById("theme");
+    const searchBox = document.getElementById("search");
+    const listBox = document.getElementById("questionList");
+    const answerBox = document.getElementById("answer-box");
+
+    // subject, theme 자동 채우기
+    const subjects = [...new Set(data.map(x => x.subject))];
+    const themes = [...new Set(data.map(x => x.theme))];
+
+    subjectBox.innerHTML = '<option value="">전체 과목</option>' +
+        subjects.map(s => `<option>${s}</option>`).join("");
+    themeBox.innerHTML = '<option value="">전체 테마</option>' +
+        themes.map(t => `<option>${t}</option>`).join("");
+
+    function render() {
+        const subj = subjectBox.value;
+        const th = themeBox.value;
+        const keyword = searchBox.value.toLowerCase();
+
+        const filtered = data.filter(item =>
+            (subj === "" || item.subject === subj) &&
+            (th === "" || item.theme === th) &&
+            item.question.toLowerCase().includes(keyword)
+        );
+
+        listBox.innerHTML = filtered.map(item =>
+            `<div class="question-item" onclick="showAnswer('${item.answer.replace(/'/g,"&#39;")}')">
+                <b>[${item.subject}] ${item.theme}</b> - ${item.question}
+            </div>`
+        ).join("");
+
+        answerBox.innerHTML = ""; // 선택 초기화
+    }
+
+    window.showAnswer = (ans) => {
+        answerBox.innerHTML = `<h3>정답</h3><p>${ans}</p>`;
+    };
+
+    subjectBox.onchange = render;
+    themeBox.onchange = render;
+    searchBox.oninput = render;
+
+    render();
+}
+</script>
+
+</body>
+</html>
