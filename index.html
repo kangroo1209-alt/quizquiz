@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>퀴즈 시스템</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+h1 { margin-bottom: 10px; }
+select, button { padding: 8px; margin-right: 10px; }
+#controls { margin-bottom: 10px; }
+#questionArea { margin-top: 20px; }
+.question-card { border: 1px solid #ccc; padding: 10px; margin-bottom: 5px; cursor: pointer; border-radius:4px; }
+.question-card:hover { background: #f0f0f0; }
+#answerBox { margin-top: 20px; padding: 12px; border: 2px solid #444; background: #f8f8ff; border-radius:6px; }
+#nextBtn, #resetBtn, #miniBtn { margin-top: 10px; padding: 8px 16px; }
+.correct { color: green; font-weight: bold; }
+.wrong { color: red; font-weight: bold; }
+#countBox { font-size: 15px; margin-top: 10px; font-weight: bold; }
+#testArea { margin-top: 20px; border: 1px dashed #ccc; padding: 10px; border-radius:6px; background:#fffdf8; }
+#progress { font-weight: bold; margin-bottom: 8px; }
+.summary { margin-top: 12px; padding: 8px; border-radius:6px; background:#fff; }
+.small { font-size: 13px; color:#666; }
+</style>
+</head>
+<body>
+
+<h1>퀴즈 시스템</h1>
+
+<div id="controls">
+  <select id="subjectSelect">
+      <option value="">과목 선택</option>
+  </select>
+
+  <select id="themeSelect">
+      <option value="">테마 선택</option>
+  </select>
+
+  <button id="miniBtn">Mini Test 시작 (모든 과목 각 10문제)</button>
+  <button id="resetBtn">리셋</button>
+</div>
+
+<div id="questionArea"></div>
+
+<button id="nextBtn">다음 문제</button>
+
+<div id="countBox"></div>
+<div id="answerBox"></div>
+
+<!-- Test area -->
+<div id="testArea" style="display:none;">
+  <div id="progress"></div>
+  <div id="testQuestionArea"></div>
+  <div id="testAnswerBox"></div>
+  <button id="testNextBtn">다음 (테스트)</button>
+  <div id="testSummary" class="summary" style="display:none;"></div>
+</div>
+
+<script>
+// ---------- 설정: JSON 경로 ----------
+const jsonURL = "https://kangroo1209-alt.github.io/quizquiz/output.json";
+
+// ---------- 전역 상태 ----------
+let quizData = [];
+let currentSubject = "";
+let currentTheme = "";
+let currentAnswers = []; // 다중정답 (array of strings)
+let usedQuestions = []; // 일반 모드: 이미 출제된 질문들 (question text)
+
+fetch(jsonURL)
+.then(res => {
+    if (!res.ok) throw new Error("JSON을 불러오지 못했습니다. 경로 확인하세요.");
+    return res.json();
+})
+.then(data => {
+    quizData = data;
+    renderSubjects();
+})
+.catch(e => {
+    document.getElementById("questionArea").innerHTML = `<p style="color:red;">데이터 로드 실패: ${e.message}</p>`;
+});
+
+// ---------- DOM 참조 ----------
+const subjectSelect = document.getElementById("subjectSelect");
+const themeSelect   = document.getElementById("themeSelect");
+const questionArea  = document.getElementById("questionArea");
+const answerBox     = document.getElementById("answerBox");
+const nextBtn       = document.getElementById("nextBtn");
+const resetBtn      = document.getElementById("resetBtn");
+const miniBtn       = document.getElementById("miniBtn");
+const countBox      = document.getElementById("countBox");
+
+// Test DOM
+const testArea = document.getElementById("testArea");
+const progressEl = document.getElementById("progress");
+const testQuestionArea = document.getElementById("testQuestionArea");
+const testAnswerBox = document.getElementById("testAnswerBox");
+const testNextBtn = document.getElementById("testNextBtn");
+const testSummary = document.getElementById("testSummary");
+
+// ---------- 기본 UI 채우기 ----------
+function renderSubjects() {
+    const subjects = [...new Set(quizData.map(q => q.subject))].sort();
+    subjectSelect.innerHTML =
+        '<option value="">과목 선택</option>' +
+        subjects.map(s => `<option value="${s}">${s}</option>`).join("");
+}
+
+subjectSelect.addEventListener("change", () => {
+    currentSubject = subjectSelect.value;
+    renderThemes();
+    usedQuestions = [];
+    countBox.innerHTML = "";
+    answerBox.innerHTML = "";
+    questionArea.innerHTML = "";
+    hideTestArea();
+});
+
+function renderThemes() {
+    const themes = [...new Set(
+        quizData.filter(q => q.subject === currentSubject)
+                .map(q => q.theme)
+    )].sort();
+
+    themeSelect.innerHTML =
+        '<option value="">테마 선택</option>' +
+        themes.map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+themeSelect.addEventListener("change", () => {
+    currentTheme = themeSelect.value;
+    usedQuestions = [];
+    answerBox.innerHTML = "";
+    updateCountBoxForCurrentTheme();
+    renderQuestion();
+    hideTestArea();
+});
+
+// ---------- 개수 표시 ----------
+function updateCountBox(totalCount) {
+    const solved = usedQuestions.length;
+    countBox.innerHTML = `전체 ${totalCount}문제 중 ${solved}문제 풀이`;
+}
+function updateCountBoxForCurrentTheme(){
+    const total = quizData.filter(q => q.subject===currentSubject && q.theme===currentTheme).length;
+    updateCountBox(total);
+}
+
+// ---------- 일반 문제 렌더링 (기존 모드) ----------
+function renderQuestion() {
+    if(!currentSubject || !currentTheme){
+        questionArea.innerHTML = "<p>과목과 테마를 선택하세요.</p>";
+        return;
+    }
+
+    let filtered = quizData.filter(q => q.subject===currentSubject && q.theme===currentTheme);
+
+    const totalCount = filtered.length;
+
+    // 사용한 문제 제외
+    filtered = filtered.filter(q => !usedQuestions.includes(q.question));
+
+    if(filtered.length === 0){
+        questionArea.innerHTML = "<p>모든 문제를 다 풀었습니다.</p>";
+        updateCountBox(totalCount);
+        return;
+    }
+
+    const randIndex = Math.floor(Math.random() * filtered.length);
+    const problem = filtered[randIndex];
+    usedQuestions.push(problem.question);
+
+    // 다중정답: 같은 question의 모든 answer 모으기
+    currentAnswers = quizData
+        .filter(q => q.subject===currentSubject && q.theme===currentTheme && q.question===problem.question)
+        .map(q => q.answer)
+        .reduce((acc,v)=> {
+            // split by comma as potential multi-answer in single cell
+            v.toString().split(',').map(s=>s.trim()).forEach(x=>{
+                if(x && acc.indexOf(x)===-1) acc.push(x);
+            });
+            return acc;
+        }, []);
+
+    // 보기 생성 (A 방식: 정답 중복 허용; 보기 자체의 중복은 제거)
+    let candidates = quizData
+        .filter(q => q.subject===currentSubject && q.theme===currentTheme)
+        .map(q => q.answer);
+    candidates = [...new Set(candidates)];
+    // shuffle
+    candidates.sort(()=>Math.random()-0.5);
+
+    // ensure at least one representative of currentAnswers is present
+    let answers = [];
+    // include representative (first of currentAnswers) to guarantee presence
+    if(currentAnswers.length>0 && !answers.includes(currentAnswers[0])) answers.push(currentAnswers[0]);
+
+    for(let c of candidates){
+        if(answers.length>=5) break;
+        if(!answers.includes(c)) answers.push(c);
+    }
+    // if still short, pad with placeholder
+    while(answers.length<5) answers.push("선택지 부족");
+
+    // shuffle final
+    answers.sort(()=>Math.random()-0.5);
+
+    // render
+    questionArea.innerHTML = `<div class="question-card"><b>문제:</b> ${problem.question}</div>`;
+    answers.forEach((ans,i)=>{
+        questionArea.innerHTML += `<div class="question-card" onclick="handleAnswer('${escapeJs(ans)}', 'normal')">${i+1}. ${ans}</div>`;
+    });
+
+    updateCountBox(totalCount);
+    answerBox.innerHTML = "";
+}
+
+// ---------- 정답 처리 (일반 모드와 테스트 모드 공유) ----------
+function handleAnswer(selected, mode, qObj){
+    // mode: 'normal' 또는 'test'
+    // qObj is used for test mode (contains currentAnswers etc.)
+    if(mode==='normal'){
+        // use currentAnswers
+        const isCorrect = currentAnswers.includes(selected);
+        if(isCorrect){
+            // show all correct answers
+            answerBox.innerHTML = `
+                <p class="correct">정답입니다!</p>
+                <p class="small"><b>정답 목록:</b></p>
+                <ul>${currentAnswers.map(a=>`<li>${a}</li>`).join('')}</ul>
+            `;
+        } else {
+            answerBox.innerHTML = `
+                <p class="wrong">오답입니다!</p>
+                <p class="small"><b>정답 목록:</b></p>
+                <ul>${currentAnswers.map(a=>`<li>${a}</li>`).join('')}</ul>
+                <p class="small">선택한 답: ${selected}</p>
+            `;
+        }
+    } else if(mode==='test'){
+        // qObj has {question, currentAnswers, subject, theme}
+        const correct = qObj.currentAnswers.includes(selected);
+        // mark answered for this question
+        if(!qObj.answered){
+            qObj.answered = true;
+            qObj.selected = selected;
+            qObj.isCorrect = correct;
+            if(!correct){
+                qObj.wrongSelected = selected;
+            }
+        }
+        // show feedback in testAnswerBox
+        testAnswerBox.innerHTML = correct
+            ? `<p class="correct">정답입니다!</p>
+               <p class="small"><b>정답 목록:</b></p>
+               <ul>${qObj.currentAnswers.map(a=>`<li>${a}</li>`).join('')}</ul>`
+            : `<p class="wrong">오답입니다!</p>
+               <p class="small"><b>정답 목록:</b></p>
+               <ul>${qObj.currentAnswers.map(a=>`<li>${a}</li>`).join('')}</ul>
+               <p class="small">선택한 답: ${selected}</p>`;
+    }
+}
+
+// helper to escape single quotes inside JS string building
+function escapeJs(s){
+    return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+// bind global for normal mode clickable items
+window.handleAnswer = function(selected, mode){
+    // for normal mode, qObj undefined
+    handleAnswer(selected, mode, undefined);
+};
+
+// ---------- 일반 모드 다음 문제 ----------
+nextBtn.addEventListener("click", renderQuestion);
+
+// ---------- 리셋 ----------
+resetBtn.addEventListener("click", ()=>{
+    usedQuestions = [];
+    countBox.innerHTML = "문제 기록이 초기화되었습니다.";
+    answerBox.innerHTML = "";
+    hideTestArea();
+});
+
+// ---------- MINI TEST 기능 구현 (요청: 모든 과목 각 10문제, 테마 랜덤+편중최소화) ----------
+let testQuestions = []; // flattened list of {subject, theme, question, currentAnswers}
+let testIndex = 0;
+let testTotal = 0;
+
+miniBtn.addEventListener("click", ()=>{
+    if(!quizData || quizData.length===0){
+        alert("데이터 로드 대기중입니다.");
+        return;
+    }
+    startMiniTest();
+});
+
+// hide test UI helper
+function hideTestArea(){
+    testArea.style.display = "none";
+    testIndex = 0;
+    testQuestions = [];
+    testSummary.style.display = "none";
+    testQuestionArea.innerHTML = "";
+    testAnswerBox.innerHTML = "";
+}
+
+function startMiniTest(){
+    // build testQuestions by subject
+    const subjects = [...new Set(quizData.map(q=>q.subject))];
+
+    testQuestions = [];
+    subjects.forEach(subj=>{
+        // collect all questions for this subject
+        const subjectPool = quizData.filter(q => q.subject === subj);
+        // We need up to 10 distinct question texts
+        const uniqueQuestions = [...new Set(subjectPool.map(x => x.question))];
+
+        // shuffle uniqueQuestions
+        uniqueQuestions.sort(()=>Math.random()-0.5);
+
+        // We'll pick up to 10, trying to avoid repeating same theme consecutively.
+        // Build pool of objects grouped by question text (choose random representative for theme/answer)
+        const questionObjs = uniqueQuestions.map(qtext=>{
+            // pick a random entry among entries with this question text
+            const entries = subjectPool.filter(e => e.question === qtext);
+            const chosen = entries[Math.floor(Math.random()*entries.length)];
+            return {
+                subject: subj,
+                question: qtext,
+                theme: chosen.theme,
+                // gather all answers for this question text (dedup, and split comma if present)
+                currentAnswers: subjectPool
+                    .filter(e => e.question === qtext)
+                    .map(e => e.answer)
+                    .reduce((acc,v)=>{
+                        v.toString().split(',').map(s=>s.trim()).forEach(x=>{
+                            if(x && acc.indexOf(x)===-1) acc.push(x);
+                        });
+                        return acc;
+                    }, [])
+            };
+        });
+
+        // Shuffle questionObjs again
+        questionObjs.sort(()=>Math.random()-0.5);
+
+        // Now pick up to 10 with attempt to avoid same theme consecutively
+        const picked = [];
+        const themesSeen = [];
+        while(picked.length < 10 && questionObjs.length > 0){
+            // try to pick one whose theme != last picked theme
+            let idx = -1;
+            for(let i=0;i<questionObjs.length;i++){
+                const cand = questionObjs[i];
+                const lastTheme = picked.length ? picked[picked.length-1].theme : null;
+                if(cand.theme !== lastTheme){
+                    idx = i;
+                    break;
+                }
+            }
+            if(idx === -1){
+                // all remaining have same theme as last -> just take the first
+                idx = 0;
+            }
+            picked.push(questionObjs.splice(idx,1)[0]);
+        }
+
+        // if less than 10 picked (subject had fewer unique questions), accept fewer
+        // append to global testQuestions
+        testQuestions.push(...picked);
+    });
+
+    // shuffle overall testQuestions to mix subjects somewhat
+    testQuestions.sort(()=>Math.random()-0.5);
+
+    // For each testQuestions item, we must also generate choices (5지선다)
+    // We'll create choices on the fly when rendering each test question to keep variety.
+    testIndex = 0;
+    testTotal = testQuestions.length;
+    showTestUI();
+    renderTestQuestion();
+}
+
+// show/hide test UI
+function showTestUI(){
+    testArea.style.display = "block";
+    // hide normal UI components that might confuse
+    // keep normal controls visible but the main questionArea will be separate
+}
+
+// render current test question
+function renderTestQuestion(){
+    if(testIndex >= testTotal){
+        finishMiniTest();
+        return;
+    }
+    const qObj = testQuestions[testIndex];
+    // Build choices for this test question from same subject/theme (A 방식: allow duplicate as answer but no duplicate choices)
+    let candidates = quizData
+        .filter(q => q.subject === qObj.subject && q.theme === qObj.theme)
+        .map(q => q.answer);
+    candidates = [...new Set(candidates)];
+    candidates.sort(()=>Math.random()-0.5);
+
+    // ensure representative answer(s) included
+    const answers = [];
+    // include first currentAnswers representative
+    if(qObj.currentAnswers.length>0) answers.push(qObj.currentAnswers[0]);
+
+    for(let c of candidates){
+        if(answers.length>=5) break;
+        if(!answers.includes(c)) answers.push(c);
+    }
+    while(answers.length<5) answers.push("선택지 부족");
+    answers.sort(()=>Math.random()-0.5);
+
+    // attach choices to qObj for later reference
+    qObj.choices = answers;
+    qObj.answered = false;
+
+    // render progress
+    progressEl.innerText = `Mini Test 진행: ${testIndex+1} / ${testTotal} (총 ${testTotal}문제)`;
+
+    // render question and choices
+    testQuestionArea.innerHTML = `<div class="question-card"><b>[${qObj.subject}]</b> ${qObj.question} <div class="small">테마: ${qObj.theme}</div></div>`;
+    testAnswerBox.innerHTML = "";
+    answers.forEach((ans,i)=>{
+        testAnswerBox.innerHTML += `<div class="question-card" onclick="handleAnswerForTest(${testIndex}, '${escapeJs(ans)}')">${i+1}. ${ans}</div>`;
+    });
+    testSummary.style.display = "none";
+}
+
+// wrapper to call handleAnswer in test mode
+window.handleAnswerForTest = function(index, selected){
+    const qObj = testQuestions[index];
+    handleAnswer(selected, 'test', qObj);
+};
+
+// test next button
+testNextBtn.addEventListener("click", ()=>{
+    // if current q not answered, ask confirm skip (we allow skipping but mark as incorrect)
+    const qObj = testQuestions[testIndex];
+    if(!qObj.answered){
+        // mark as skipped and incorrect
+        qObj.answered = true;
+        qObj.isCorrect = false;
+        qObj.selected = null;
+        qObj.wrongSelected = null;
+    }
+    testIndex++;
+    if(testIndex >= testTotal){
+        finishMiniTest();
+    } else {
+        renderTestQuestion();
+    }
+});
+
+// finish and show summary
+function finishMiniTest(){
+    // compute score and wrong list
+    let correctCount = 0;
+    const wrongs = [];
+    testQuestions.forEach(q=>{
+        if(q.isCorrect) correctCount++;
+        else {
+            wrongs.push({
+                subject: q.subject,
+                theme: q.theme,
+                question: q.question,
+                correctAnswers: q.currentAnswers,
+                yourChoice: q.wrongSelected || null
+            });
+        }
+    });
+
+    testQuestionArea.innerHTML = "";
+    testAnswerBox.innerHTML = "";
+    progressEl.innerText = `Mini Test 완료: ${correctCount} / ${testTotal} (정답률 ${(correctCount/testTotal*100).toFixed(1)}%)`;
+
+    // show summary
+    let html = `<p><b>점수:</b> ${correctCount} / ${testTotal} (${((correctCount/testTotal)*100).toFixed(1)}%)</p>`;
+    html += `<p><b>틀린 문제 수:</b> ${wrongs.length}</p>`;
+    if(wrongs.length>0){
+        html += `<div><b>틀린 문제 목록</b><ol>`;
+        wrongs.forEach(w=>{
+            html += `<li><b>[${w.subject}] ${w.question}</b><br/><span class="small">테마:${w.theme}</span><br/>정답: ${w.correctAnswers.join(", ")}<br/>선택: ${w.yourChoice || "없음(미응답)"}</li>`;
+        });
+        html += `</ol></div>`;
+    }
+    html += `<button id="retestBtn">다시 테스트</button>`;
+    testSummary.innerHTML = html;
+    testSummary.style.display = "block";
+
+    // bind retest
+    document.getElementById("retestBtn").addEventListener("click", ()=>{
+        // restart a fresh mini test
+        startMiniTest();
+    });
+}
+
+// ---------- 유틸 ----------
+// escape helper already defined earlier
+// Reuse escapeJs
+</script>
+</body>
+</html>
