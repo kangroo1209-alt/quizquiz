@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>퀴즈 시스템</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+h1 { margin-bottom: 10px; }
+select, button { padding: 8px; margin-right: 10px; }
+#questionArea { margin-top: 20px; }
+.question-card {
+    border: 1px solid #ccc; padding: 10px; margin-bottom: 5px; cursor: pointer;
+    background: white;
+}
+.question-card:hover { background: #f0f0f0; }
+#answerBox { margin-top: 20px; padding: 10px; border: 1px solid #444; background: #fafafa; }
+#nextBtn { margin-top: 10px; padding: 8px 16px; }
+.correct { color: green; font-weight: bold; }
+.wrong { color: red; font-weight: bold; }
+.menuBar { margin-bottom: 20px; }
+
+/* 미니테스트 배경색 */
+.mini-mode .question-card { 
+    background: #fffce6; 
+}
+
+/* 리셋버튼 빨강 */
+#resetBtn {
+    padding: 6px 12px;
+    margin-left: 10px;
+    background-color: #ff4d4d;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+}
+#resetBtn:hover { background-color: #e60000; }
+
+/* 여기까지만 풀기 버튼 */
+#stopMiniBtn {
+    padding: 6px 12px;
+    background-color: #ff9900;
+    color: black;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+}
+#stopMiniBtn:hover { background-color: #e67e00; }
+
+</style>
+</head>
+<body>
+
+<h1>퀴즈 시스템</h1>
+
+<div class="menuBar">
+    <button id="miniTestBtn">🔥 Mini Test (각 과목 10문제)</button>
+    <button id="resetBtn">리셋</button>
+</div>
+
+<select id="subjectSelect">
+    <option value="">과목 선택</option>
+</select>
+
+<select id="themeSelect">
+    <option value="">테마 선택</option>
+</select>
+
+<p id="progressText"></p>
+
+<div id="questionArea"></div>
+
+<div id="answerInputArea"></div>
+
+<button id="nextBtn">다음 문제</button>
+<button id="stopMiniBtn" style="display:none;">여기까지만 풀기 ㅠㅠ</button>
+
+<div id="answerBox"></div>
+
+<script>
+const jsonURL = "https://kangroo1209-alt.github.io/quizquiz/output.json";
+
+let quizData = [];
+let currentSubject = "";
+let currentTheme = "";
+let currentQuestion = null;
+let currentAnswers = [];
+let usedQuestions = new Set();
+
+let miniMode = false;
+let miniList = [];
+let miniIndex = 0;
+let miniWrong = [];
+let miniSubjects = [];
+
+fetch(jsonURL)
+.then(res => res.json())
+.then(data => {
+    quizData = data;
+    renderSubjects();
+});
+
+// HTML elements
+const subjectSelect = document.getElementById("subjectSelect");
+const themeSelect = document.getElementById("themeSelect");
+const questionArea = document.getElementById("questionArea");
+const answerBox = document.getElementById("answerBox");
+const nextBtn = document.getElementById("nextBtn");
+const miniTestBtn = document.getElementById("miniTestBtn");
+const stopMiniBtn = document.getElementById("stopMiniBtn");
+const resetBtn = document.getElementById("resetBtn");
+const answerInputArea = document.getElementById("answerInputArea");
+const progressText = document.getElementById("progressText");
+
+/* --------------------------------------------------
+   과목 & 테마 렌더링
+-------------------------------------------------- */
+function renderSubjects() {
+    const subjects = [...new Set(quizData.map(q => q.subject))];
+    subjectSelect.innerHTML =
+        '<option value="">과목 선택</option>' +
+        subjects.map(s => `<option value="${s}">${s}</option>`).join("");
+
+    miniSubjects = subjects;
+}
+
+subjectSelect.addEventListener("change", () => {
+    currentSubject = subjectSelect.value;
+    renderThemes();
+    usedQuestions.clear();
+    updateProgress();
+    answerBox.innerHTML = "";
+});
+
+function renderThemes() {
+    const themes = [...new Set(
+        quizData.filter(q => q.subject === currentSubject).map(q => q.theme)
+    )];
+    themeSelect.innerHTML =
+        '<option value="">테마 선택</option>' +
+        themes.map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+themeSelect.addEventListener("change", () => {
+    currentTheme = themeSelect.value;
+    miniMode = false;
+    renderQuestion();
+    updateProgress();
+    answerBox.innerHTML = "";
+});
+
+/* --------------------------------------------------
+   정답 여러 개인 문제 처리
+-------------------------------------------------- */
+function getCorrectAnswers(questionText) {
+    return [...new Set(
+        quizData.filter(q => q.question === questionText).map(q => q.answer)
+    )];
+}
+
+/* --------------------------------------------------
+   숫자 자동 포맷팅 + 평가
+-------------------------------------------------- */
+function normalizeNumber(str) {
+    if (!str) return null;
+    str = str.trim();
+
+    str = str.replace(/,/g, "");
+    str = str.replace(/[a-zA-Z%]+/g, "");
+
+    if (str.startsWith(".")) str = "0" + str;
+
+    let val = Number(str);
+    if (isNaN(val)) return null;
+
+    return val;
+}
+
+/* --------------------------------------------------
+   문제 출력
+-------------------------------------------------- */
+function renderQuestion() {
+    answerInputArea.innerHTML = "";
+    answerBox.innerHTML = "";
+
+    if (!currentSubject || !currentTheme) {
+        questionArea.innerHTML = "<p>과목과 테마를 선택하세요.</p>";
+        return;
+    }
+
+    const filtered = quizData.filter(
+        q => q.subject === currentSubject && q.theme === currentTheme
+    );
+
+    const candidates = filtered.filter(q => !usedQuestions.has(q.question));
+
+    if (candidates.length === 0) {
+        questionArea.innerHTML = "<p>모든 문제를 다 풀었습니다.</p>";
+        return;
+    }
+
+    const q = candidates[Math.floor(Math.random() * candidates.length)];
+    currentQuestion = q;
+    usedQuestions.add(q.question);
+
+    renderQuestionCard(q);
+    updateProgress();
+}
+
+/* --------------------------------------------------
+   문제 카드 출력
+-------------------------------------------------- */
+function renderQuestionCard(q) {
+    const correctAnswers = getCorrectAnswers(q.question);
+    const mainAnswer = correctAnswers[0];
+
+    questionArea.innerHTML =
+        `<div class="question-card"><b>문제:</b> ${q.question}</div>`;
+
+    if (q.theme === "계산") {
+        renderCalcInput(correctAnswers);
+        return;
+    }
+
+    let answers = [mainAnswer];
+
+    const sameSet = quizData.filter(
+        item => item.subject === q.subject && item.theme === q.theme
+    );
+
+    let otherAnswers = sameSet
+        .map(item => item.answer)
+        .filter(a => !correctAnswers.includes(a));
+
+    while (answers.length < 5 && otherAnswers.length > 0) {
+        const idx = Math.floor(Math.random() * otherAnswers.length);
+        answers.push(otherAnswers[idx]);
+        otherAnswers.splice(idx, 1);
+    }
+
+    answers = answers.sort(() => Math.random() - 0.5);
+    currentAnswers = answers;
+
+    answers.forEach((ans, i) => {
+        questionArea.innerHTML += `
+            <div class="question-card" onclick="checkAnswer('${ans.replace(/'/g,"&#39;")}')">
+                ${i + 1}. ${ans}
+            </div>`;
+    });
+}
+
+/* --------------------------------------------------
+   계산 문제 입력창
+-------------------------------------------------- */
+function renderCalcInput(correctAnswers) {
+    answerInputArea.innerHTML = `
+        <input id="calcInput" type="text" placeholder="정답 입력" style="padding:5px;">
+        <button onclick="checkCalcAnswer()">제출</button>
+    `;
+
+    window.checkCalcAnswer = () => {
+        let userInput = document.getElementById("calcInput").value;
+        let userValue = normalizeNumber(userInput);
+        let correctValue = normalizeNumber(correctAnswers[0]);
+
+        if (userValue === correctValue) {
+            answerBox.innerHTML = `<p class="correct">정답입니다!</p>
+                <p>다른 정답들: ${correctAnswers.join(", ")}</p>`;
+        } else {
+            answerBox.innerHTML = `<p class="wrong">오답입니다!</p>
+                <p>정답: ${correctAnswers.join(", ")}</p>`;
+        }
+
+        if (miniMode) handleMiniProgress(userInput, correctAnswers);
+    };
+}
+
+/* --------------------------------------------------
+   선택형 문제 정답 확인
+-------------------------------------------------- */
+window.checkAnswer = (ans) => {
+    const correctAnswers = getCorrectAnswers(currentQuestion.question);
+    const mainAnswer = correctAnswers[0];
+
+    if (ans === mainAnswer) {
+        answerBox.innerHTML = `<p class="correct">정답입니다!</p>
+        <p>다른 정답들: ${correctAnswers.join(", ")}</p>`;
+    } else {
+        answerBox.innerHTML = `<p class="wrong">오답입니다!</p>
+        <p>정답: ${correctAnswers.join(", ")}</p>`;
+    }
+
+    if (miniMode) handleMiniProgress(ans, correctAnswers);
+};
+
+/* --------------------------------------------------
+   다음 문제 버튼
+-------------------------------------------------- */
+nextBtn.addEventListener("click", () => {
+    if (!miniMode) renderQuestion();
+});
+
+/* --------------------------------------------------
+   리셋 버튼
+-------------------------------------------------- */
+resetBtn.addEventListener("click", () => {
+    usedQuestions.clear();
+    miniMode = false;
+    answerBox.innerHTML = "";
+    questionArea.innerHTML = "";
+    answerInputArea.innerHTML = "";
+    progressText.innerHTML = "";
+    document.body.classList.remove("mini-mode");
+});
+
+/* --------------------------------------------------
+   Mini Test
+-------------------------------------------------- */
+miniTestBtn.addEventListener("click", startMiniTest);
+
+function startMiniTest() {
+    miniMode = true;
+    usedQuestions.clear();
+    miniWrong = [];
+    miniIndex = 0;
+    document.body.classList.add("mini-mode");
+    stopMiniBtn.style.display = "inline-block";
+
+    miniList = [];
+    miniSubjects.forEach(sub => {
+        let pool = quizData.filter(q => q.subject === sub);
+        let selected = [];
+
+        while (selected.length < 10 && pool.length > 0) {
+            let idx = Math.floor(Math.random() * pool.length);
+            selected.push(pool[idx]);
+            pool.splice(idx, 1);
+        }
+
+        miniList.push(...selected);
+    });
+
+    renderMiniQuestion();
+}
+
+function renderMiniQuestion() {
+    if (miniIndex >= miniList.length) {
+        showMiniResult();
+        return;
+    }
+
+    const q = miniList[miniIndex];
+    currentQuestion = q;
+
+    currentSubject = q.subject;
+    currentTheme = q.theme;
+
+    renderQuestionCard(q);
+    updateProgress(true);
+}
+
+stopMiniBtn.addEventListener("click", () => {
+    showMiniResult();
+});
+
+function handleMiniProgress(userAnswer, correctAnswers) {
+    if (normalizeNumber(userAnswer) !== normalizeNumber(correctAnswers[0])) {
+        miniWrong.push({
+            question: currentQuestion.question,
+            myAnswer: userAnswer,
+            correct: correctAnswers
+        });
+    }
+
+    miniIndex++;
+    setTimeout(renderMiniQuestion, 600);
+}
+
+function showMiniResult() {
+    miniMode = false;
+    document.body.classList.remove("mini-mode");
+    stopMiniBtn.style.display = "none";
+
+    let score = miniList.length - miniWrong.length;
+
+    let html = `<h2>Mini Test 결과</h2>`;
+    html += `<p><b>${miniList.length}문제 중 ${score}개 정답</b></p>`;
+
+    if (miniWrong.length > 0) {
+        html += `<h3>틀린 문제</h3>`;
+        miniWrong.forEach(w => {
+            html += `
+            <div style="margin-bottom:10px;">
+                <b>문제:</b> ${w.question}<br>
+                <b>내 답:</b> ${w.myAnswer}<br>
+                <b>정답:</b> ${w.correct.join(", ")}
+            </div>`;
+        });
+    } else {
+        html += `<p>전부 정답입니다! 완벽!</p>`;
+    }
+
+    questionArea.innerHTML = html;
+    answerBox.innerHTML = "";
+    answerInputArea.innerHTML = "";
+    progressText.innerHTML = "";
+}
+
+/* --------------------------------------------------
+   진행 상황 표시
+-------------------------------------------------- */
+function updateProgress(isMini = false) {
+    if (isMini) {
+        let subject = miniList[miniIndex]?.subject || "";
+        progressText.innerHTML = `
+            <b>Mini Test 진행 중</b><br>
+            현재 과목: ${subject}<br>
+            ${miniIndex} / ${miniList.length} 문제 풀음
+        `;
+    } else {
+        const filtered = quizData.filter(
+            q => q.subject === currentSubject && q.theme === currentTheme
+        );
+        progressText.innerHTML = `
+            ${usedQuestions.size} / ${filtered.length} 문제 풀음
+        `;
+    }
+}
+
+</script>
+</body>
+</html>
+
+
+
+
+
